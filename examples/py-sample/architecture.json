@@ -1,0 +1,10 @@
+{
+  "layers": {
+    "domain": ["app/domain"],
+    "db": ["app/db"]
+  },
+  "rules": {
+    "domain": [],
+    "db": ["domain"]
+  }
+}

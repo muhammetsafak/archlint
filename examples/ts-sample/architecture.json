@@ -1,0 +1,11 @@
+{
+  "aliases": { "@/": "src/" },
+  "layers": {
+    "domain": ["src/domain"],
+    "db": ["src/db"]
+  },
+  "rules": {
+    "domain": [],
+    "db": ["domain"]
+  }
+}

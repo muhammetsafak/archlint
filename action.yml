@@ -1,0 +1,35 @@
+name: archlint
+description: Enforce architectural import boundaries (Go, TypeScript, Python) from architecture.json
+author: muhammetsafak
+branding:
+  icon: git-merge
+  color: purple
+
+inputs:
+  config:
+    description: Path to the architecture.json config
+    required: false
+    default: architecture.json
+  dir:
+    description: Directory to scan
+    required: false
+    default: "."
+  version:
+    description: archlint version to install (a release tag, or "latest")
+    required: false
+    default: latest
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version: stable
+
+    - shell: bash
+      run: go install github.com/muhammetsafak/archlint/cmd/archlint@${{ inputs.version }}
+
+    # GITHUB_ACTIONS is set by the runner, so archlint emits inline ::error annotations;
+    # a non-zero exit fails the step and blocks the merge.
+    - shell: bash
+      run: archlint check --config "${{ inputs.config }}" "${{ inputs.dir }}"

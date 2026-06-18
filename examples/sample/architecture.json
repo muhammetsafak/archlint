@@ -1,0 +1,11 @@
+{
+  "module": "github.com/acme/app",
+  "layers": {
+    "domain": ["internal/domain"],
+    "db": ["internal/db"]
+  },
+  "rules": {
+    "domain": [],
+    "db": ["domain"]
+  }
+}
