@@ -96,7 +96,7 @@ Use the bundled action — under GitHub Actions, violations show up as **inline 
 the PR diff** (file + line) and a failing check blocks the merge:
 
 ```yaml
-- uses: muhammetsafak/archlint@v1
+- uses: muhammetsafak/archlint@v0.1.0
   with:
     config: architecture.json   # optional
     dir: .                      # optional
