@@ -69,6 +69,65 @@ resolved against the importing file's package, and absolute imports map dotted�
 
 A single config can govern a mixed Go + TypeScript + Python repo at once.
 
+## Executable ADRs
+
+Architecture Decision Records are where a team *writes down* why a boundary exists — and then
+the `architecture.json` somewhere else is what actually gets enforced. The two drift apart.
+archlint lets the ADR **be** the rule: drop a fenced ` ```archlint ` block into an ADR and its
+directives are compiled into the rule set, merged with `architecture.json`, and enforced in CI.
+
+````markdown
+# ADR 0007: The domain layer is infrastructure-free
+
+The domain holds the business model and may not depend on persistence — so a refactor
+can swap the database without touching a single domain type.
+
+```archlint
+# declare (or extend) a layer's repo-relative path prefixes
+layer domain = internal/domain
+layer db     = internal/db, internal/dao
+
+# allowed and forbidden edges (same semantics as architecture.json's rules)
+allow db -> domain      # the repository depends on the model
+deny  domain -> db      # the model must never reach into persistence
+```
+````
+
+The directives, one per line inside the block:
+
+| Directive | Meaning |
+| --------- | ------- |
+| `layer <name> = <prefix>[, <prefix>...]` | declare or **extend** a layer's path prefixes |
+| `allow <from> -> <to>` | `<from>` may import `<to>` |
+| `deny <from> -> <to>` | `<from>` may **not** import `<to>` (the default — made explicit) |
+
+`#` starts a comment (whole-line or trailing); blank lines are ignored. Prose outside the
+` ```archlint ` block — including an `allow`-looking sentence — is never parsed.
+
+Point archlint at the ADR directory with `--adr-dir` (default `docs/adr`); when it doesn't
+exist, archlint behaves exactly as before, so adopting this is opt-in.
+
+```sh
+archlint check                          # also reads ./docs/adr if present
+archlint check --adr-dir .ssot/adr ./svc
+```
+
+**How the two sources merge** — the ADR set and `architecture.json` are unioned:
+
+- **layers** — an ADR may add prefixes to an existing layer or introduce a new one.
+- **allow** — an edge allowed by *either* source is allowed.
+- **deny** — authoritative. If an ADR `deny`s an edge that `architecture.json` (or another
+  ADR) `allow`s, archlint **errors** with the ADR `file:line` and the conflicting rule rather
+  than silently picking a winner — the whole point is that the record and the gate can't
+  disagree.
+
+Every violation reports the ADR it came from, so a failing check points straight at the
+decision it broke:
+
+```
+internal/domain/bad.go:5  domain → db is not allowed  (import "…/internal/db")  [docs/adr/0007-domain-is-infra-free.md]
+```
+
 ## Usage
 
 ```sh
@@ -88,6 +147,9 @@ archlint check examples/ts-sample   # TypeScript (resolves the "@/" alias)
 
 archlint check examples/py-sample   # Python (relative import)
 # examples/py-sample/app/domain/bad.py:3  domain → db is not allowed  (import "..db.repo")
+
+archlint check examples/adr-sample  # the deny rule lives in an ADR (executable ADR)
+# examples/adr-sample/internal/domain/bad.go:6  domain → db is not allowed  (import "…/internal/db")  [docs/adr/0001-domain-is-infra-free.md]
 ```
 
 ### In CI
@@ -132,8 +194,9 @@ fix hint; pass `--format text` to force plain output, or `--format github` to fo
 - **Import boundaries, for now.** It governs the dependency graph between layers. Detecting
   a synchronous call where an async one was required, or a direct DB query across a domain
   boundary, comes from correlating runtime traces — a later phase.
-- **Dependency-free** (Go stdlib only). The config is JSON today; YAML support is a
-  follow-up (it adds one dependency).
+- **Dependency-free** (Go stdlib only). Rules come from `architecture.json` and/or
+  ` ```archlint ` blocks in your ADRs (see *Executable ADRs*); both are parsed with the
+  standard library. JSON today; YAML support is a follow-up (it adds one dependency).
 - **Deterministic by design.** The point is a guardrail you can gate CI on: same diff, same
   verdict, no model in the loop.
 

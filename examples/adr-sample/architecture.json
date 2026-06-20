@@ -1,0 +1,9 @@
+{
+  "module": "github.com/acme/app",
+  "layers": {
+    "domain": ["internal/domain"]
+  },
+  "rules": {
+    "domain": []
+  }
+}

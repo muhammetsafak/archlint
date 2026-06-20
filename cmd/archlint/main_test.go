@@ -133,3 +133,88 @@ func TestRunCheck_AutoGitHubFormat(t *testing.T) {
 		t.Fatalf("auto github format → exit 1, got %d", code)
 	}
 }
+
+// projectWithADRRule builds a tree whose architecture.json governs only one layer, and whose
+// ADR declares the *other* layer plus the deny that makes the planted import a violation —
+// proving an ADR-sourced rule participates in linting.
+func projectWithADRRule(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	// json knows only the domain layer (no db, no deny edge): on its own, no violation.
+	write(t, filepath.Join(root, "architecture.json"),
+		`{"module":"github.com/acme/app","layers":{"domain":["internal/domain"]},"rules":{"domain":[]}}`)
+	// The ADR introduces the db layer and the deny; the decision record IS the rule.
+	write(t, filepath.Join(root, "docs/adr/0001-layering.md"),
+		"# ADR 0001\n\n```archlint\nlayer db = internal/db\ndeny domain -> db\n```\n")
+	write(t, filepath.Join(root, "internal/domain/bad.go"),
+		"package domain\n\nimport \"github.com/acme/app/internal/db\"\n") // VIOLATION via ADR
+	write(t, filepath.Join(root, "internal/db/repo.go"), "package db\n")
+	return root
+}
+
+func TestRunCheck_ADRSourcedViolation(t *testing.T) {
+	root := projectWithADRRule(t)
+	cfg := filepath.Join(root, "architecture.json")
+	// Without the ADR dir, nothing governs db → clean.
+	if code := runCheck([]string{"--config", cfg, "--adr-dir", filepath.Join(root, "nope"), root}); code != 0 {
+		t.Fatalf("without ADRs the tree is clean, got exit %d", code)
+	}
+	// With the ADR dir, the deny is enforced → violation.
+	if code := runCheck([]string{"--config", cfg, "--adr-dir", filepath.Join(root, "docs/adr"), root}); code != 1 {
+		t.Fatalf("an ADR-sourced deny must be enforced, got exit %d", code)
+	}
+}
+
+func TestRunCheck_ADRDefaultDirResolvedInsideScannedDir(t *testing.T) {
+	root := projectWithADRRule(t)
+	// No --adr-dir flag: the default "docs/adr" must resolve inside the scanned dir.
+	if code := runCheck([]string{root}); code != 1 {
+		t.Fatalf("default adr-dir should resolve inside the scanned dir, got exit %d", code)
+	}
+}
+
+func TestRunCheck_ADRConflictExitsTwo(t *testing.T) {
+	root := t.TempDir()
+	// json allows db -> domain; the ADR denies it → an irreconcilable conflict (exit 2).
+	write(t, filepath.Join(root, "architecture.json"),
+		`{"module":"github.com/acme/app","layers":{"domain":["internal/domain"],"db":["internal/db"]},"rules":{"domain":[],"db":["domain"]}}`)
+	write(t, filepath.Join(root, "docs/adr/0001.md"),
+		"```archlint\ndeny db -> domain\n```\n")
+	if code := runCheck([]string{root}); code != 2 {
+		t.Fatalf("an ADR/json conflict must exit 2, got %d", code)
+	}
+}
+
+func TestRunCheck_ADRParseErrorExitsTwo(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "architecture.json"),
+		`{"module":"github.com/acme/app","layers":{"domain":["internal/domain"]},"rules":{"domain":[]}}`)
+	write(t, filepath.Join(root, "docs/adr/bad.md"), "```archlint\nbanish a -> b\n```\n")
+	if code := runCheck([]string{root}); code != 2 {
+		t.Fatalf("a malformed ADR directive must exit 2, got %d", code)
+	}
+}
+
+func TestEmitText_ADRSource(t *testing.T) {
+	var buf bytes.Buffer
+	violations := []arch.Violation{
+		{File: "internal/domain/bad.go", Line: 3, FromLayer: "domain", ToLayer: "db",
+			Import: "x/internal/db", Source: "docs/adr/0001.md"},
+	}
+	emitText(&buf, ".", "architecture.json", 2, violations)
+	if !strings.Contains(buf.String(), "[docs/adr/0001.md]") {
+		t.Errorf("text output must attribute the ADR source:\n%s", buf.String())
+	}
+}
+
+func TestEmitGitHub_ADRSource(t *testing.T) {
+	var buf bytes.Buffer
+	violations := []arch.Violation{
+		{File: "internal/domain/bad.go", Line: 3, FromLayer: "domain", ToLayer: "db",
+			Import: "x/internal/db", Source: "docs/adr/0001.md"},
+	}
+	emitGitHub(&buf, ".", violations)
+	if !strings.Contains(buf.String(), "[docs/adr/0001.md]") {
+		t.Errorf("github output must attribute the ADR source:\n%s", buf.String())
+	}
+}

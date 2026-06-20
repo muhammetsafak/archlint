@@ -96,6 +96,21 @@ func TestLoad_ModuleOptionalWithAliases(t *testing.T) {
 	}
 }
 
+func TestRevalidate(t *testing.T) {
+	c := &Config{
+		Layers: map[string][]string{"a": {"x"}, "b": {"y"}},
+		Rules:  map[string][]string{"a": {"b"}, "b": {}},
+	}
+	if err := c.Revalidate(); err != nil {
+		t.Fatalf("a valid mutated config should revalidate: %v", err)
+	}
+	// Mutate it into an invalid state (a rule points at an undeclared layer).
+	c.Rules["a"] = []string{"ghost"}
+	if err := c.Revalidate(); err == nil {
+		t.Fatal("Revalidate must catch a rule target that is not a declared layer")
+	}
+}
+
 func TestLoad_MissingOrInvalid(t *testing.T) {
 	if _, err := Load(filepath.Join(t.TempDir(), "nope.json")); err == nil {
 		t.Fatal("a missing config should error")

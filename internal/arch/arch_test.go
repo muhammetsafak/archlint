@@ -53,7 +53,7 @@ func project(t *testing.T) (string, *config.Config) {
 func TestLint_FlagsTheBoundaryViolationOnly(t *testing.T) {
 	root, cfg := project(t)
 
-	violations, err := Lint(root, cfg)
+	violations, err := Lint(root, cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestLint_SkipsSpecialCases(t *testing.T) {
 		Layers: map[string][]string{"domain": {"internal/domain"}, "db": {"internal/db"}},
 		Rules:  map[string][]string{"domain": {}, "db": {"domain"}},
 	}
-	v, err := Lint(root, cfg)
+	v, err := Lint(root, cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestLint_TypeScript(t *testing.T) {
 		Layers:  map[string][]string{"domain": {"src/domain"}, "db": {"src/db"}},
 		Rules:   map[string][]string{"domain": {}, "db": {"domain"}},
 	}
-	v, err := Lint(root, cfg)
+	v, err := Lint(root, cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestLint_Python(t *testing.T) {
 		Layers: map[string][]string{"domain": {"app/domain"}, "db": {"app/db"}},
 		Rules:  map[string][]string{"domain": {}, "db": {"domain"}},
 	}
-	v, err := Lint(root, cfg)
+	v, err := Lint(root, cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestLint_CleanTreeHasNoViolations(t *testing.T) {
 		Rules:  map[string][]string{"domain": {}, "db": {"domain"}},
 	}
 
-	violations, err := Lint(root, cfg)
+	violations, err := Lint(root, cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

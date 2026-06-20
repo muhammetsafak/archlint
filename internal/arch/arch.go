@@ -21,14 +21,27 @@ type Violation struct {
 	FromLayer string
 	ToLayer   string
 	Import    string // the offending import specifier
+	// Source names where the broken rule was declared: "" for architecture.json, or the
+	// repo-relative path of the ADR file that forbade the edge (executable ADR). It is
+	// purely for traceability in the report — it does not affect whether an edge violates.
+	Source string
+}
+
+// RuleSource attributes a forbidden from -> to edge to the ADR file that declared it (or ""
+// when the rule came from architecture.json). internal/adr.Ruleset satisfies it; a nil
+// RuleSource means "no ADR rules", leaving every violation attributed to the json config.
+type RuleSource interface {
+	SourceOf(from, to string) string
 }
 
 var ignoredDirs = map[string]struct{}{
 	"vendor": {}, ".git": {}, "node_modules": {}, "testdata": {},
 }
 
-// Lint scans root and returns the boundary violations, sorted by file then line.
-func Lint(root string, cfg *config.Config) ([]Violation, error) {
+// Lint scans root and returns the boundary violations, sorted by file then line. src may be
+// nil; when non-nil it attributes each violation to the ADR file that declared the broken
+// rule (see internal/adr), leaving json-sourced rules with an empty Source.
+func Lint(root string, cfg *config.Config, ruleSrc RuleSource) ([]Violation, error) {
 	var violations []Violation
 
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -75,12 +88,17 @@ func Lint(root string, cfg *config.Config) ([]Violation, error) {
 			if toLayer == "" || cfg.Allows(fromLayer, toLayer) {
 				continue
 			}
+			source := ""
+			if ruleSrc != nil {
+				source = ruleSrc.SourceOf(fromLayer, toLayer)
+			}
 			violations = append(violations, Violation{
 				File:      rel,
 				Line:      imp.Line,
 				FromLayer: fromLayer,
 				ToLayer:   toLayer,
 				Import:    imp.Raw,
+				Source:    source,
 			})
 		}
 		return nil

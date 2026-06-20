@@ -44,6 +44,12 @@ func Load(path string) (*Config, error) {
 	return &c, nil
 }
 
+// Revalidate re-runs the config invariants after the layers/rules have been mutated in place
+// — e.g. once ADR-derived rules have been merged in (see internal/adr). It guarantees the
+// merged config still satisfies the same contract a freshly-loaded one does: every layer has
+// prefixes, every layer has a rule, and every rule target is a declared layer.
+func (c *Config) Revalidate() error { return c.validate() }
+
 func (c *Config) validate() error {
 	// Module is optional (only Go needs it); a TS-only project declares aliases instead.
 	if len(c.Layers) == 0 {
