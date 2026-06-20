@@ -1,0 +1,15 @@
+{
+  "module": "github.com/acme/shop",
+  "layers": {
+    "domain":  ["internal/ordering/domain"],
+    "app":     ["internal/ordering/app"],
+    "ledger":  ["internal/billing/ledger"],
+    "gateway": ["internal/billing/gateway"]
+  },
+  "rules": {
+    "domain":  ["ledger"],
+    "app":     ["domain", "gateway"],
+    "ledger":  [],
+    "gateway": ["ledger"]
+  }
+}

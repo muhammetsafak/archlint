@@ -1,0 +1,6 @@
+{
+  "teams": {
+    "commerce": ["domain", "app"],
+    "platform": ["ledger", "gateway"]
+  }
+}

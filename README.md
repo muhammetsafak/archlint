@@ -128,6 +128,130 @@ decision it broke:
 internal/domain/bad.go:5  domain → db is not allowed  (import "…/internal/db")  [docs/adr/0007-domain-is-infra-free.md]
 ```
 
+## Coupling metrics & Conway/DDD analysis (`archlint metrics`)
+
+`archlint check` answers a yes/no question: did any import cross a forbidden boundary? Some
+architectural risk is more graduated — a layer everything depends on is *expensive* to change
+even when no rule forbids it; a context reached into through the back door is fragile even when
+the layer rule "allows" the edge; a dependency that crosses three team boundaries will be slow
+to ship even when it compiles. `archlint metrics` computes these signals **on the same import
+graph** `check` already builds, prints them, and can gate CI on a breach — without ever changing
+a lint verdict. It is **opt-in and backward-compatible**: a default `check` run is unchanged, and
+`metrics` with no extra config is a read-only report.
+
+```sh
+archlint metrics                                   # coupling table for .
+archlint metrics --contexts contexts.json ./svc    # + bounded-context boundary checks
+archlint metrics --teams teams.json --max-instability 0.8
+```
+
+### 1. Coupling metrics (Robert C. Martin)
+
+For every declared layer, on the cross-layer dependency graph:
+
+| Metric | Formula | Meaning |
+| ------ | ------- | ------- |
+| **Ca** (afferent) | count of distinct layers that import this layer | who depends on me (incoming) |
+| **Ce** (efferent) | count of distinct layers this layer imports | who I depend on (outgoing) |
+| **I** (instability) | `I = Ce / (Ca + Ce)` | 0 = maximally stable (only depended upon), 1 = maximally unstable. A layer with no edges is `I = 0` by definition. |
+| **A** (abstractness) | declared (see below) | fraction of the layer that is abstract: `1.0` or `0.0` |
+| **D** (distance) | `D = \|A + I − 1\|` | distance from the "main sequence" (`A + I = 1`); `0` is ideal, near `1` is the zone of pain (stable + concrete) or uselessness (unstable + abstract) |
+
+archlint has no per-symbol abstract/concrete data, so **A is a coarse, explicit proxy**: a layer
+listed in a context's `"abstract"` array (see below) gets `A = 1.0`; every other layer is
+`A = 0.0`. D is reported so you can spot a heavily-depended-upon layer (`I → 0`) that is also
+concrete (`A = 0`, so `D → 1`) — exactly the layer a refactor will hurt.
+
+**Stable-Dependencies Principle (SDP).** An edge `L → M` is flagged when `I(L) < I(M)`: a
+*more-stable* layer depending on a *less-stable* one. Stable code should not hang off volatile
+code, because the volatile side drags churn into the stable one. SDP breaches gate CI under
+`--fail-on-violation` (on by default).
+
+The **instability gate** is separate and explicit: `--max-instability F` (in `0..1`) fails the
+run when any layer's `I` exceeds `F`. It is **off unless you pass it** (the default is `-1`).
+
+### 2. Bounded contexts (DDD) — `contexts.json`
+
+A bounded context groups layers and publishes a narrow **public API/port**: the only layers
+another context is allowed to import. An import that lands on a *non-public* (internal) layer of
+another context bypasses the port — a boundary breach, even when the layer rule permits the edge.
+
+```json
+{
+  "contexts": [
+    { "name": "ordering", "layers": ["domain", "app"], "public": ["app"], "abstract": ["domain"] },
+    { "name": "billing",  "layers": ["ledger", "gateway"], "public": ["gateway"] }
+  ]
+}
+```
+
+- **`layers`** — the layer names (same names as `architecture.json`) that belong to the context.
+  Contexts must not overlap (a layer has at most one context); layers in no context are ignored.
+- **`public`** — the subset of `layers` other contexts may import. A layer in the context but
+  absent from `public` is **internal**. An **empty `public` closes the context**: every inbound
+  cross-context import is a breach (declare a port to open it).
+- **`abstract`** — optional; marks layers abstract for the `A` metric (so `contexts.json` doubles
+  as the abstractness declaration).
+
+A cross-context import to a public layer is fine; to an internal layer it is reported (and gates
+CI under `--fail-on-violation`):
+
+```
+ordering/domain → billing/ledger  is not a published port  at internal/ordering/domain/order.go:7
+```
+
+### 3. Conway Mismatch Index — `teams.json`
+
+Conway's law says a system's structure mirrors the org that built it. The **Conway Mismatch
+Index (CMI)** quantifies how much the *code's* dependencies cut across the *org's* team
+boundaries. Declare which team owns each layer:
+
+```json
+{ "teams": { "commerce": ["domain", "app"], "platform": ["ledger", "gateway"] } }
+```
+
+Let **E** be the set of distinct cross-layer import edges whose **both** endpoints' layers are
+owned by some team, and **X ⊆ E** the subset whose two endpoints belong to **different** teams.
+Then:
+
+```
+CMI = |X| / |E|                  (0 when |E| = 0)
+```
+
+`CMI = 0` means every code dependency stays inside one team; `CMI = 1` means every dependency
+crosses a team boundary. A per-layer mismatch is reported too: for each owned layer, the fraction
+of its owned incident edges (in or out) that cross a team boundary — surfacing the modules whose
+dependencies fight the org chart.
+
+A layer owned by no team is **excluded** from the index (CMI is only defined over owned edges).
+When **no ownership mapping is present** (`teams.json` absent and no `--teams`), Conway is simply
+**skipped** — never an error. `CODEOWNERS` ingestion is a planned follow-up; `teams.json` is the
+default today.
+
+### Flags, defaults, and exit code
+
+| Flag | Default | Effect |
+| ---- | ------- | ------ |
+| `--config` | `architecture.json` | the layer/rule config (resolved like `check`'s) |
+| `--adr-dir` | `docs/adr` | executable-ADR rules merge first, exactly as in `check` |
+| `--contexts` | `contexts.json` | bounded-context map; **absent ⇒ no context analysis** |
+| `--teams` | `teams.json` | team-ownership map; **absent ⇒ Conway skipped** |
+| `--max-instability` | `-1` (off) | fail when any layer's `I` exceeds this `0..1` ceiling |
+| `--fail-on-violation` | `true` | exit `1` on an SDP or bounded-context breach |
+| `--format` | auto | `text`, or `github` (inline `::error`/`::notice`) — auto-`github` under Actions |
+
+Exit codes match `check`'s convention: **`2`** on a usage/config error, **`1`** when a *gated*
+breach is found (an over-instability layer, or — under `--fail-on-violation` — an SDP or context
+violation), **`0`** otherwise. The default run with no contexts, no teams, and no gate is purely
+observational and always exits `0`.
+
+```sh
+archlint metrics examples/metrics-sample
+# Coupling table (Ca/Ce/I/A/D per layer), a cross-context bypass
+# (ordering/domain → billing/ledger), and a Conway Mismatch Index of 0.50.
+# `check` on the same tree is clean — the layer rules permit the edge; metrics is what catches it.
+```
+
 ## Usage
 
 ```sh
@@ -150,6 +274,9 @@ archlint check examples/py-sample   # Python (relative import)
 
 archlint check examples/adr-sample  # the deny rule lives in an ADR (executable ADR)
 # examples/adr-sample/internal/domain/bad.go:6  domain → db is not allowed  (import "…/internal/db")  [docs/adr/0001-domain-is-infra-free.md]
+
+archlint metrics examples/metrics-sample  # coupling + DDD + Conway (check on this tree is clean)
+# ordering/domain → billing/ledger  is not a published port  ...  /  Conway Mismatch Index: 0.50
 ```
 
 ### In CI
@@ -178,11 +305,13 @@ fix hint; pass `--format text` to force plain output, or `--format github` to fo
 
 ## Exit codes
 
-| Code | Meaning |
-| ---- | ------- |
-| `0`  | no boundary violations |
-| `1`  | one or more imports cross a forbidden boundary |
-| `2`  | usage / config error |
+Both `check` and `metrics` share one convention:
+
+| Code | `check` | `metrics` |
+| ---- | ------- | --------- |
+| `0`  | no boundary violations | no gated breach |
+| `1`  | one or more imports cross a forbidden boundary | a gated breach (over-instability layer, or — under `--fail-on-violation` — an SDP or bounded-context violation) |
+| `2`  | usage / config error | usage / config error |
 
 ## Scope & limits (honest list)
 
@@ -191,9 +320,13 @@ fix hint; pass `--format text` to force plain output, or `--format github` to fo
   standard forms (`import … from`, `export … from`, `require()`, dynamic `import()`; Python
   `import a.b` and `from … import`, including relative imports) — these are *not* full
   parsers, so an import-like string inside a comment or string literal can be a false positive.
-- **Import boundaries, for now.** It governs the dependency graph between layers. Detecting
-  a synchronous call where an async one was required, or a direct DB query across a domain
-  boundary, comes from correlating runtime traces — a later phase.
+- **Import boundaries, plus structural metrics.** `check` governs the dependency graph between
+  layers; `archlint metrics` adds coupling (Ca/Ce/I/A/D), bounded-context, and Conway signals on
+  that same graph (see *Coupling metrics & Conway/DDD analysis*). Both work on the static import
+  graph: detecting a synchronous call where an async one was required, or a direct DB query
+  across a domain boundary, comes from correlating runtime traces — a later phase. Abstractness
+  (`A`) is a declared proxy, not symbol-level analysis; team ownership is a `teams.json`
+  (`CODEOWNERS` ingestion is a follow-up).
 - **Dependency-free** (Go stdlib only). Rules come from `architecture.json` and/or
   ` ```archlint ` blocks in your ADRs (see *Executable ADRs*); both are parsed with the
   standard library. JSON today; YAML support is a follow-up (it adds one dependency).

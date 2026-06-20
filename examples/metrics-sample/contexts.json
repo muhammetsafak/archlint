@@ -1,0 +1,15 @@
+{
+  "contexts": [
+    {
+      "name": "ordering",
+      "layers": ["domain", "app"],
+      "public": ["app"],
+      "abstract": ["domain"]
+    },
+    {
+      "name": "billing",
+      "layers": ["ledger", "gateway"],
+      "public": ["gateway"]
+    }
+  ]
+}
